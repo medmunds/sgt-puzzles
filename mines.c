@@ -67,13 +67,19 @@ enum {
 
 #define PREFERRED_TILE_SIZE 20
 #define TILE_SIZE (ds->tilesize)
+#ifdef NARROW_BORDERS
+#define BORDER (max(TILE_SIZE * 3 / 20, 1) + (IS_CYCLIC(ds->grid->type) ? ARROW_DIST+ARROW_HEAD_WIDTH : 0))
+#define OUTER_HIGHLIGHT_WIDTH (max(TILE_SIZE * 3 / 20 - 1, 1))
+#else
 #ifdef SMALL_SCREEN
 #define BORDER (IS_CYCLIC(ds->grid->type) ? ARROW_DIST+ARROW_HEAD_WIDTH + 4 : 8)
 #else
 #define BORDER max(TILE_SIZE * 3 / 2, ARROW_DIST+ARROW_HEAD_WIDTH + 2)
 #endif
-#define HIGHLIGHT_WIDTH (TILE_SIZE / 10 ? TILE_SIZE / 10 : 1)
 #define OUTER_HIGHLIGHT_WIDTH (BORDER / 10 ? BORDER / 10 : 1)
+#endif
+
+#define HIGHLIGHT_WIDTH (TILE_SIZE / 10 ? TILE_SIZE / 10 : 1)
 
 /* Dimensions for arrow to indicate cyclic grid */
 #define ARROW_HEAD_WIDTH ((TILE_SIZE + 3) / 4)

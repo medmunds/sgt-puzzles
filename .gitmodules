@@ -1,0 +1,4 @@
+[submodule "unreleased"]
+	path = unreleased
+	url = ../puzzles-unreleased.git
+	branch = puzzles-web

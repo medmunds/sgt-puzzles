@@ -106,7 +106,7 @@ function(build_platform_extras)
                 DEPENDS
                 ${help_dir}/en
                 ${CMAKE_CURRENT_SOURCE_DIR}/puzzles.but
-                ${CMAKE_CURRENT_SOURCE_DIR}/emcccopy.but
+                # ${CMAKE_CURRENT_SOURCE_DIR}/emcccopy.but
                 WORKING_DIRECTORY ${help_dir}/en)
         add_custom_target(doc ALL
                 DEPENDS ${help_dir}/en/index.html)

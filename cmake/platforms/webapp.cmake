@@ -55,7 +55,6 @@ set(CMAKE_CXX_LINK_FLAGS "${CMAKE_CXX_LINK_FLAGS} \
 -sEXPORT_ES6=1 \
 -sMODULARIZE=1 \
 -sWASM=1 \
--sWASM_BIGINT \
 ")
 
 set(build_cli_programs FALSE)

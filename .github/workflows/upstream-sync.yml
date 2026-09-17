@@ -1,0 +1,80 @@
+# Mirrors the upstream main branch locally
+
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: '0 3 * * *'  # Daily at 03:00 UTC
+  workflow_dispatch:
+
+env:
+  UPSTREAM_REPO: https://git.tartarus.org/simon/puzzles.git
+  UPSTREAM_BRANCH: main
+  MIRROR_BRANCH: main
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  mirror-upstream:
+    name: Mirror upstream branch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      has_updates: ${{ steps.sync.outputs.has_updates }}
+      old_sha: ${{ steps.sync.outputs.old_sha }}
+      new_sha: ${{ steps.sync.outputs.new_sha }}
+    steps:
+      - name: Checkout local ${{ env.MIRROR_BRANCH }} branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.MIRROR_BRANCH }}
+          fetch-depth: 0  # full history so the fast-forward check is reliable
+
+      - name: Fetch upstream ${{ env.UPSTREAM_BRANCH }} branch
+        run: git fetch "$UPSTREAM_REPO" "refs/heads/$UPSTREAM_BRANCH:refs/remotes/upstream/$UPSTREAM_BRANCH"
+
+      - name: Sync upstream to local
+        id: sync
+        shell: bash
+        run: |
+          UPSTREAM_REF="upstream/$UPSTREAM_BRANCH"
+          MIRROR_REF="origin/$MIRROR_BRANCH"
+          UPSTREAM_SHA=$(git rev-parse "$UPSTREAM_REF")
+          MIRROR_SHA=$(git rev-parse HEAD)
+
+          echo "$UPSTREAM_REF: $UPSTREAM_SHA"
+          echo "$MIRROR_REF:   $MIRROR_SHA"
+          echo "old_sha=$MIRROR_SHA" >> "$GITHUB_OUTPUT"
+          echo "new_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
+
+          if [ "$UPSTREAM_SHA" = "$MIRROR_SHA" ]; then
+            echo "::notice::$MIRROR_REF is already up to date with $UPSTREAM_REF."
+            echo "has_updates=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "New commits on $UPSTREAM_REF. Fast-forwarding $MIRROR_REF..."
+          if ! git merge --ff-only "$UPSTREAM_REF"; then
+            echo "::error::Fast-forward failed: $MIRROR_REF has diverged from $UPSTREAM_REF."
+            exit 1
+          fi
+
+          echo "has_updates=true" >> "$GITHUB_OUTPUT"
+
+      - name: Push updated mirror
+        if: steps.sync.outputs.has_updates == 'true'
+        run: git push origin "HEAD:refs/heads/$MIRROR_BRANCH"
+
+  trigger-pr:
+    # Pushes made with GITHUB_TOKEN don't fire `push` triggers, so call the
+    # merge workflow directly. Permissions here cap what the called workflow gets.
+    needs: mirror-upstream
+    if: needs.mirror-upstream.outputs.has_updates == 'true'
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    uses: ./.github/workflows/upstream-merge.yml

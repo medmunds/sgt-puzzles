@@ -1,0 +1,167 @@
+# Opens a PR to rebase the target branch onto the upstream mirror branch,
+# or opens an issue if there are conflicts.
+
+name: Upstream merge
+
+on:
+  push:
+    branches:
+      - main         # mirror branch: manual pushes
+      - puzzles-web  # target branch: keep the pending PR rebased
+  workflow_call:     # from upstream-sync workflow
+  workflow_dispatch:
+
+env:
+  TARGET_BRANCH: puzzles-web
+  MIRROR_BRANCH: main
+  PR_BRANCH: sync/upstream
+  LABEL: upstream-sync
+  TITLE_PREFIX: '[Upstream sync]'
+
+jobs:
+  merge-upstream:
+    name: Rebase target onto upstream mirror
+    runs-on: ubuntu-latest
+    concurrency:
+      group: upstream-merge
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout ${{ env.TARGET_BRANCH }}
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          # full history of all branches (origin/main included) for the rebase
+          fetch-depth: 0
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Rebase target and open PR or issue
+        shell: bash
+        env:
+          # gh cli config:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MIRROR_REF="origin/$MIRROR_BRANCH"
+          NEW_SHA=$(git rev-parse "$MIRROR_REF")
+          SHORT_SHA=$(git rev-parse --short "$NEW_SHA")
+          OLD_SHA=$(jq -r '.sha // empty' upstream-id.json 2>/dev/null || true)
+
+          if git merge-base --is-ancestor "$MIRROR_REF" HEAD; then
+            echo "::notice::$TARGET_BRANCH already contains $MIRROR_REF ($SHORT_SHA)"
+            exit 0
+          fi
+
+          # Ensure the label exists
+          gh label create "$LABEL" --color D93F0B \
+            --description "Automated upstream sync" --force >/dev/null
+
+          git checkout -B "$PR_BRANCH"
+          if ! git rebase --empty=drop "$MIRROR_REF"; then
+            echo "::warning::Rebase of $TARGET_BRANCH onto $MIRROR_REF ($SHORT_SHA) hit conflicts"
+            CONFLICT_FILES=$(git diff --name-only --diff-filter=U)
+            [ -n "$CONFLICT_FILES" ] || CONFLICT_FILES=$(git status --short)
+            git rebase --abort
+
+            ISSUE_TITLE="$TITLE_PREFIX Conflicts rebasing onto upstream $SHORT_SHA"
+            cat > issue-body.md <<EOF
+          Automated rebase of \`$TARGET_BRANCH\` onto \`$MIRROR_REF\` failed due to merge conflicts.
+
+          Upstream SHA: \`$NEW_SHA\`
+          Previously synced upstream SHA: \`${OLD_SHA:-unknown}\`
+
+          Conflicting files:
+          \`\`\`
+          $CONFLICT_FILES
+          \`\`\`
+
+          To resolve locally:
+
+          \`\`\`bash
+          git fetch origin
+          git checkout -B $PR_BRANCH origin/$TARGET_BRANCH
+
+          # Rebase onto latest $MIRROR_BRANCH, resolving conflicts as needed:
+          git rebase --empty=drop origin/$MIRROR_BRANCH
+          git add <resolved-files>
+          git rebase --continue
+
+          # Update metadata in upstream-id.json:
+          git show -s --format='{"date":"%aI","sha":"%H"}' origin/$MIRROR_BRANCH > upstream-id.json
+          git add upstream-id.json
+          git commit -m "puzzles-web: update upstream to $SHORT_SHA"
+
+          # Push and open a PR into $TARGET_BRANCH. Merge it promptly: the next
+          # automated run will force-push over $PR_BRANCH.
+          git push --force origin $PR_BRANCH
+          \`\`\`
+          EOF
+
+            # Find existing issue, if any
+            ISSUE_NUM=$(gh issue list --state open --label "$LABEL" \
+              --json number --jq '.[0].number // empty')
+
+            if [ -n "$ISSUE_NUM" ]; then
+              gh issue edit "$ISSUE_NUM" --title "$ISSUE_TITLE" --body-file issue-body.md
+              echo "::notice::Updated issue #$ISSUE_NUM"
+            else
+              ISSUE_LINK=$(gh issue create --title "$ISSUE_TITLE" --body-file issue-body.md --label "$LABEL")
+              echo "::notice::Created issue $ISSUE_LINK"
+            fi
+            exit 0
+          fi
+
+          # Update upstream-id.json metadata
+          git show -s --format='{"date":"%aI","sha":"%H"}' "$MIRROR_REF" > upstream-id.json
+          git add upstream-id.json
+          if ! git diff --cached --quiet; then
+            git commit -m "$TARGET_BRANCH: update upstream to $SHORT_SHA"
+          fi
+
+          git push --force origin "$PR_BRANCH"
+
+          if [ -n "$OLD_SHA" ] && git cat-file -e "$OLD_SHA^{commit}" 2>/dev/null; then
+            RANGE_TEXT="Upstream commits: \`$OLD_SHA..$NEW_SHA\`"
+            LOG=$(git log --oneline --no-decorate "$OLD_SHA..$NEW_SHA")
+          else
+            RANGE_TEXT="Upstream HEAD: \`$NEW_SHA\` (previous SHA unknown; showing last 20 commits)"
+            LOG=$(git log --oneline --no-decorate -n 20 "$NEW_SHA")
+          fi
+
+          PR_TITLE="$TITLE_PREFIX Merge upstream $SHORT_SHA"
+          cat > pr-body.md <<EOF
+          Automated sync of upstream changes from \`$MIRROR_BRANCH\` into \`$TARGET_BRANCH\`.
+
+          $RANGE_TEXT
+
+          \`\`\`
+          $LOG
+          \`\`\`
+          EOF
+
+          # Find existing PR, if any
+          PR_NUM=$(gh pr list --base "$TARGET_BRANCH" --head "$PR_BRANCH" --state open \
+            --json number --jq '.[0].number // empty')
+
+          if [ -n "$PR_NUM" ]; then
+            gh pr edit "$PR_NUM" --title "$PR_TITLE" --body-file pr-body.md
+            PR_REF="#$PR_NUM"
+            echo "::notice::Updated PR #$PR_NUM"
+          else
+            PR_REF=$(gh pr create --base "$TARGET_BRANCH" --head "$PR_BRANCH" \
+              --title "$PR_TITLE" --body-file pr-body.md --label "$LABEL")
+            echo "::notice::Created PR $PR_REF"
+          fi
+
+          # Close any now-resolved conflict issues
+          for n in $(gh issue list --state open --label "$LABEL" --json number --jq '.[].number'); do
+            gh issue close "$n" --comment "Rebase onto upstream $SHORT_SHA succeeded; see $PR_REF."
+            echo "::notice::Closed issue #$n"
+          done

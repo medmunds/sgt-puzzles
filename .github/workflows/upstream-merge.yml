@@ -53,6 +53,7 @@ jobs:
           NEW_SHA=$(git rev-parse "$MIRROR_REF")
           SHORT_SHA=$(git rev-parse --short "$NEW_SHA")
           OLD_SHA=$(jq -r '.sha // empty' upstream-id.json 2>/dev/null || true)
+          TARGET_SHA=$(git rev-parse HEAD)
 
           if git merge-base --is-ancestor "$MIRROR_REF" HEAD; then
             echo "::notice::$TARGET_BRANCH already contains $MIRROR_REF ($SHORT_SHA)"
@@ -86,7 +87,7 @@ jobs:
 
           \`\`\`bash
           git fetch origin
-          git checkout -B $PR_BRANCH origin/$TARGET_BRANCH
+          git checkout -B $PR_BRANCH $TARGET_SHA
 
           # Rebase onto latest $MIRROR_BRANCH, resolving conflicts as needed:
           git rebase --empty=drop origin/$MIRROR_BRANCH
@@ -98,9 +99,9 @@ jobs:
           git add upstream-id.json
           git commit -m "puzzles-web: update upstream to $SHORT_SHA"
 
-          # Push and open a PR into $TARGET_BRANCH. Merge it promptly: the next
-          # automated run will force-push over $PR_BRANCH.
-          git push --force origin $PR_BRANCH
+          # Force push the result to $TARGET_BRANCH:
+          git push --force-with-lease=$TARGET_BRANCH:$TARGET_SHA \\
+            origin $PR_BRANCH:$TARGET_BRANCH
           \`\`\`
           EOF
 
@@ -118,6 +119,8 @@ jobs:
             exit 0
           fi
 
+          ### Rebased cleanly ###
+
           # Update upstream-id.json metadata
           git show -s --format='{"date":"%aI","sha":"%H"}' "$MIRROR_REF" > upstream-id.json
           git add upstream-id.json
@@ -128,22 +131,35 @@ jobs:
           git push --force origin "$PR_BRANCH"
 
           if [ -n "$OLD_SHA" ] && git cat-file -e "$OLD_SHA^{commit}" 2>/dev/null; then
-            RANGE_TEXT="Upstream commits: \`$OLD_SHA..$NEW_SHA\`"
+            RANGE_TEXT="Upstream commits: $OLD_SHA..$NEW_SHA"
             LOG=$(git log --oneline --no-decorate "$OLD_SHA..$NEW_SHA")
           else
-            RANGE_TEXT="Upstream HEAD: \`$NEW_SHA\` (previous SHA unknown; showing last 20 commits)"
+            RANGE_TEXT="Upstream HEAD: $NEW_SHA (previous SHA unknown; showing last 20 commits)"
             LOG=$(git log --oneline --no-decorate -n 20 "$NEW_SHA")
           fi
 
-          PR_TITLE="$TITLE_PREFIX Merge upstream $SHORT_SHA"
+          PR_TITLE="$TITLE_PREFIX Rebase onto upstream $SHORT_SHA"
           cat > pr-body.md <<EOF
-          Automated sync of upstream changes from \`$MIRROR_BRANCH\` into \`$TARGET_BRANCH\`.
+          Clean automated rebase of \`$TARGET_BRANCH\` onto \`$MIRROR_REF\`.
 
           $RANGE_TEXT
 
-          \`\`\`
           $LOG
+          
+          Due to rebasing, this \`$PR_BRANCH\` branch must be force-pushed \
+          to \`$TARGET_BRANCH\`. (Do not try to use GitHub's merge, squash or \
+          rebase buttons, or resolve merge conflicts in \`upstream-id.json\`. \
+          The reported conflicts are inaccurate.)
+
+          To "merge" this PR:
+
+          \`\`\`bash
+          git fetch origin
+          git push --force-with-lease=$TARGET_BRANCH:$TARGET_SHA \\
+            origin origin/$PR_BRANCH:refs/heads/$TARGET_BRANCH
           \`\`\`
+
+          GitHub should automatically close this PR after pushing to \`$TARGET_BRANCH\`.
           EOF
 
           # Find existing PR, if any

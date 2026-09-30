@@ -95,7 +95,7 @@ jobs:
           git rebase --continue
 
           # Update metadata in upstream-id.json:
-          git show -s --format='{"date":"%aI","sha":"%H"}' origin/$MIRROR_BRANCH > upstream-id.json
+          git show -s --format='{"date":"%cI","sha":"%H"}' origin/$MIRROR_BRANCH > upstream-id.json
           git add upstream-id.json
           git commit -m "puzzles-web: update upstream to $SHORT_SHA"
 
@@ -122,7 +122,7 @@ jobs:
           ### Rebased cleanly ###
 
           # Update upstream-id.json metadata
-          git show -s --format='{"date":"%aI","sha":"%H"}' "$MIRROR_REF" > upstream-id.json
+          git show -s --format='{"date":"%cI","sha":"%H"}' "$MIRROR_REF" > upstream-id.json
           git add upstream-id.json
           if ! git diff --cached --quiet; then
             git commit -m "$TARGET_BRANCH: update upstream to $SHORT_SHA"

@@ -74,15 +74,20 @@ function(set_platform_puzzle_target_properties NAME TARGET)
     # Always build with source maps to allow extracting dependency licenses.
     # As of emsdk 4.0.15, -gsource-map alone does not disable optimizations,
     # so does not (significantly) increase the size of the generated wasm.
+    # [We'd also like -gseparate-dwarf for improved Chrome debugging and Sentry
+    # stack traces, but that currently disables important Binaryen optimizations.
+    # See https://github.com/emscripten-core/emscripten/issues/25239.]
     target_compile_options(${TARGET} PRIVATE
         -gsource-map
     )
     target_link_options(${TARGET} PRIVATE
         # Generate TypeScript .d.ts files for emcc exports
         "--emit-tsd" "${NAME}.d.ts"
-        # Generate DWARF source maps for Debug builds
+        # Generate DWARF source maps (Debug builds only, see above)
         $<$<CONFIG:Debug>:-gseparate-dwarf>
-        $<$<CONFIG:Debug>:-gsource-map=inline>
+        # Have llvm include build-id that Sentry can use as debug id
+        "LINKER:--build-id"
+        # Build source maps for extracting dependency licenses
         -gsource-map
     )
 endfunction()

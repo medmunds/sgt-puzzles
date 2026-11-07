@@ -11,9 +11,6 @@ set(platform_gui_libs)
 set(platform_libs embind)
 set(CMAKE_EXECUTABLE_SUFFIX ".js")
 
-set(WASM ON
-        CACHE BOOL "Compile to WebAssembly rather than plain JavaScript")
-
 find_program(HALIBUT halibut)
 if(NOT HALIBUT)
     message(WARNING "HTML documentation cannot be built (did not find halibut)")
@@ -37,25 +34,11 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DNARROW_BORDERS")
-
-# -lexports.js prevents wasmImports name minification, which allows reusing
-# a single emcc runtime wrapper for all <puzzle>.wasm. (The linker doesn't
-# seem to mind that exports.js doesn't exist.)
-# (See https://github.com/emscripten-core/emscripten/issues/16695.)
-# -sDYNAMIC_EXECUTION=0 is required to avoid CSP script-src 'unsafe-eval'
-set(CMAKE_CXX_LINK_FLAGS "${CMAKE_CXX_LINK_FLAGS} \
---no-entry \
--lexports.js \
--sALLOW_MEMORY_GROWTH=1 \
--sALLOW_TABLE_GROWTH=1 \
--sDYNAMIC_EXECUTION=0 \
--sENVIRONMENT=web,worker \
--sEXPORT_BINDINGS=1 \
--sEXPORT_ES6=1 \
--sMODULARIZE=1 \
--sWASM=1 \
-")
+add_compile_options(
+    # Add debug info for source maps and license extraction.
+    # [As of emsdk 4.0.15, -g3 does not disable optimizations.]
+    -g
+)
 
 set(build_cli_programs FALSE)
 set(build_gui_programs FALSE)
@@ -71,22 +54,34 @@ function(set_platform_gui_target_properties TARGET)
 endfunction()
 
 function(set_platform_puzzle_target_properties NAME TARGET)
-    # Always build with source maps to allow extracting dependency licenses.
-    # As of emsdk 4.0.15, -gsource-map alone does not disable optimizations,
-    # so does not (significantly) increase the size of the generated wasm.
-    # [We'd also like -gseparate-dwarf for improved Chrome debugging and Sentry
-    # stack traces, but that currently disables important Binaryen optimizations.
-    # See https://github.com/emscripten-core/emscripten/issues/25239.]
-    target_compile_options(${TARGET} PRIVATE
-        -gsource-map
+    target_compile_definitions(${TARGET} PRIVATE
+        $<$<COMPILE_LANGUAGE:C>:NARROW_BORDERS>
     )
     target_link_options(${TARGET} PRIVATE
         # Generate TypeScript .d.ts files for emcc exports
-        "--emit-tsd" "${NAME}.d.ts"
-        # Generate DWARF source maps (Debug builds only, see above)
-        $<$<CONFIG:Debug>:-gseparate-dwarf>
+        --emit-tsd "${NAME}.d.ts"
         # Have llvm include build-id that Sentry can use as debug id
         "LINKER:--build-id"
+        # Prevent wasmImports name minification, to allow reusing a single emcc runtime
+        # wrapper for all <puzzle>.wasm. (It's ok that exports.js doesn't exist.
+        # See https://github.com/emscripten-core/emscripten/issues/16695)
+        -lexports.js
+        # Don't fail malloc if possible (allows larger puzzle sizes)
+        -sALLOW_MEMORY_GROWTH=1
+        # Disable anything that would require CSP script-src 'unsafe-eval'
+        -sDYNAMIC_EXECUTION=0
+        # Limit environments to reduce wrapper code size
+        -sENVIRONMENT=web,worker
+        # Make the wrapper an es6 module (rather than UMD)
+        -sEXPORT_ES6=1
+        # Export an init function from the wrapper (rather than loading <puzzle>.wasm 
+        # immediately at import, to allow sharing single wrapper between puzzles)
+        -sMODULARIZE=1
+        # Generate DWARF source maps. [Currently debug builds only. We'd like to
+        # also enable this for release, to improve Chrome debugging and Sentry stack
+        # traces, but that currently disables important Binaryen optimizations.
+        # See https://github.com/emscripten-core/emscripten/issues/25239.]
+        $<$<CONFIG:Debug>:-gseparate-dwarf>
         # Build source maps for extracting dependency licenses
         -gsource-map
     )
